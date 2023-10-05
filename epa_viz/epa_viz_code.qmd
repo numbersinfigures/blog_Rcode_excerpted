@@ -1,0 +1,503 @@
+---
+title: "epa_viz_code"
+format: html
+editor: visual
+---
+Below, I walk through a number of predictors in the model, holding others steady, to get an impression of how each impacts the model predictions.
+
+```{r setup, include=FALSE, echo=FALSE, message=FALSE}
+library(dplyr)
+library(zoo)
+library(ggplot2)
+library(tidyverse)
+library(plotly)
+library(viridis)
+
+#code extracted from blog post 10/5/23
+
+### BASELINE PLOT SETTINGS
+
+m <- list(
+  l = 50,
+  r = 50,
+  b = 100,
+  t = 90,
+  pad = 4
+)
+
+t <- list(
+  family = "Calibri")
+
+####
+```
+
+## **PLAY-LEVEL FACTORS**
+
+### **Game Time and Field Position**
+
+#### Figure 1. Heatmap
+
+```{r ,echo=F,message=F,warning=F}
+### HALF SECONDS REMAINING
+baseset <- tibble::tibble(
+  "season" = 2019,
+  "home_team" = c("SEA"),
+  "posteam" = "SEA",
+  "roof" = "outdoors",
+  "half_seconds_remaining" = c(900),
+  "yardline_100" = 75,
+  "down" = 1,
+  "ydstogo" = 10,
+  "posteam_timeouts_remaining" = 3,
+  "defteam_timeouts_remaining" = 3
+)
+
+half_seconds_remaining = c(1800:0)
+yardline_100 = c(99:0)
+posteam = c("SEA","KC")
+
+myvarset <- expand_grid(half_seconds_remaining,yardline_100,posteam)
+
+myvardf <- baseset %>% 
+  select(-names(myvarset)) %>% 
+  right_join(myvarset,by = character()) %>% 
+  mutate(ydstogo=ifelse(yardline_100 < 10,yardline_100,ydstogo))
+
+myarep <- myvardf %>% 
+  nflfastR::calculate_expected_points() %>% 
+  arrange(posteam,half_seconds_remaining) %>% 
+  mutate(posteam = factor(posteam,levels=c("SEA","KC"),labels=c("home","away")))
+#         yardline_100=factor(yardline_100,levels=c("90","75","50","25","10")))
+
+p <- myarep %>% 
+  filter(posteam=="home") %>% 
+  select(ep,yardline_100,half_seconds_remaining)
+
+meeptext <- paste("\nYards to End Zone: ",  p$yardline_100,
+                  "\nSeconds Left in the Half: ",  p$half_seconds_remaining,
+                  "\nExpected Points: ", round(p$ep,2))
+
+meep <- ggplot(data=p,aes(x = half_seconds_remaining , y = yardline_100,fill=ep,
+                          text=meeptext)) +
+  xlab("Time Left in Half (s)") + ylab("Yards to End Zone") +
+  geom_tile() + scale_x_reverse() +  scale_y_reverse() +
+  scale_fill_viridis(option = "A") + theme_bw()
+
+ggplotly(meep,tooltip=c("meeptext"),width=600,height=600) %>% 
+  layout(title=list(text=paste0("Yards to Goal, Seconds Left in the Half, and Expected Points",
+                      '<br>',
+                      '<sup>',
+                      "Home team, 1st & 10, No timeouts used, outdoors",
+                      '</sup>'),x=0.01), font=t,margin = m)
+
+
+```
+
+#### Figure 2. Surface Plot
+
+```{r,echo=F,message=F,warning=F}
+library(reshape2)
+surfacetext <- paste("\nYds to End Zone: ",p$yardline_100,
+                      "\nSeconds Left in Half: ",p$half_seconds_remaining,
+                      "\nExpected Points: ", round(p$ep,3))
+
+m2 <- list(
+  l = 50,
+  r = 50,
+  b = 90,
+  t = 80,
+  pad = 4
+)
+
+
+mp <- acast(p, yardline_100 ~ half_seconds_remaining , value.var='ep')
+
+fig <- plot_ly(z = ~mp, width=600, height=600)
+fig <- fig %>% add_surface(hovertemplate = paste0('Seconds left in Half: %{x}<br>', 'Yards to Goal: %{y}<br>', 'EP: %{z}<extra></extra>'),
+                           colorbar = list(title = "EP")) %>% 
+  layout(title=list(text=paste0("Time Left in the Half, Yards to Goal, and Expected Points",
+                                                      '<br>',
+                                                      '<sup>',
+                                                      "1st and 10, All timeouts, Outdoors, Home Team",
+                                                      '</sup>'),x=0.01),
+         font=t,margin = m2,
+         scene = list(
+           xaxis = list(title = 'Seconds Left in Half'),
+           yaxis = list(title = 'Yards to Goal'),
+           zaxis = list(title = "Expected Points")
+         ))
+
+fig
+```
+
+#### Figure 3. Line plot
+
+```{r,echo=F,message=F,warning=F}
+pslice <- myarep %>% 
+  filter(yardline_100 %in% c(90,75,50,25,10)) %>% 
+  select(ep,yardline_100,half_seconds_remaining,posteam)
+
+meeptext <- paste("\nYards to End Zone: ",  pslice$yardline_100,
+                  "\nSeconds Left in the Half: ",  pslice$half_seconds_remaining,
+                  "\nExpected Points: ", round(pslice$ep,2))
+
+m3 <- list(
+  l = 50,
+  r = 50,
+  b = 100,
+  t = 100,
+  pad = 4
+)
+
+meep <- pslice %>%  
+  mutate(yardline_100=factor(yardline_100,levels=c("90","75","50","25","10"))) %>% 
+  ggplot(aes(x = half_seconds_remaining , y = ep,group=yardline_100,color=yardline_100,
+                          text=meeptext)) +
+  xlab("Time Left in Half (s)") + ylab("EP") + labs(color="Yards to End Zone") +
+  geom_line(linewidth=1) + scale_x_reverse() + 
+  scale_color_brewer(palette = "Dark2") + theme_bw() + facet_grid(. ~ posteam)
+
+ggplotly(meep,tooltip=c("meeptext"),width=600,height=600) %>% 
+  layout(title=list(text=paste0("Seconds Left in the Half and Expected Points by Yards to Goal",
+                      '<br>',
+                      '<sup>',
+                      "1st & 10, Start of 2nd/4th qtr, All timeouts for both teams, outdoors",
+                      '</sup>'),x=0.01), font=t,margin = m3)
+```
+
+::: callout-tip
+##### Cursory Observation
+
+-   Generally, expected points don't drop off precipitously until very late in the half
+-   Expected points for the road team remain fairly stable over the majority of the half, but are higher and decline slightly over time for the home team
+:::
+
+### **Down**
+
+#### Figure 4. Dumbbell plot
+
+```{r ,echo=F,message=F,warning=F}
+### downs, yards to goal
+down=c(1:3)
+yardline_100=c(10,25,50,75,90)
+
+m <- list(
+  l = 50,
+  r = 50,
+  b = 100,
+  t = 100,
+  pad = 4
+)
+
+myvarset <- expand_grid(down,yardline_100)
+
+myvardf <- baseset %>% 
+  select(-names(myvarset)) %>% 
+  right_join(myvarset,by = character())
+
+myarep <- myvardf %>% 
+  nflfastR::calculate_expected_points() %>% 
+  arrange(yardline_100,down) %>% 
+  mutate(
+#    posteam = factor(posteam,levels=c("SEA","KC"),labels=c("home","away")),
+         yardline_100=factor(yardline_100,levels=c("90","75","50","25","10")))
+
+downtext <- paste("\nDown: ",myarep$down,
+                  "\nYards to Endzone: ",  myarep$yardline_100,
+                      "\nExpected Points: ", round(myarep$ep,1))
+
+# font_add_google("oswald","my")
+# showtext_auto()
+
+###ADD TEXT TO AESHETTIC!!
+w <- myarep %>% 
+  ggplot(aes(text=downtext)) +
+  geom_hline(yintercept=0,color="dark grey",linetype = "dashed") + 
+  geom_linerange(aes(x=yardline_100, ymin =-2.5, ymax = 5.5),size=1,color="grey") + 
+  geom_point(aes(x = yardline_100, 
+                y= ep,
+                color=as.character(down)),size=7) +
+  geom_text(aes(label = paste0("<b>",round(ep,1),"</b>"), x = yardline_100, y = ep), #note thatI changed the greek letter Delta to "D:" because of encoding reasons
+            #            fill = "white",
+            color = "black",
+            size = 3, fontface = "bold") +
+  scale_color_manual(breaks = c("1", "2", "3"),
+                       values=c("lightgreen", "gold","lightcoral")) +
+  xlab("Yards to Goal") + 
+  ylab("EP") + 
+  ylim(-2.5, 5.5) +
+  labs(color="Down") +
+  theme_minimal() +
+  theme(plot.caption = element_text(hjust = 0)) + # set the left align here
+  # labs(title = "This is the title.", 
+  #      subtitle = "This is the subtitile.", 
+  #      caption = "This is the caption.") +
+  coord_flip()
+
+ggplotly(w,tooltip=c("downtext")) %>% 
+  layout(title=list(text=paste0("Downs with 10 yards to go, Yards to Goal, and Expected Points",
+                      '<br>',
+                      '<sup>',
+                      "Home team, All timeouts for both teams, Outdoors, Start of 2nd/4th qtr, 2022",
+                      '</sup>'),x = 0.01),
+         font=t,margin=m)
+         
+```
+
+::: callout-tip
+##### Cursory Observation
+
+-   Down-to-down differences in expected points are fairly stable no matter where on the field you compare
+:::
+
+### **Timeouts**
+
+#### Figure 5. Heatmap
+
+```{r ,echo=F,message=F,warning=F}
+baseset <- tibble::tibble(
+  "season" = 2019,
+  "home_team" = c("SEA"),
+  "posteam" = "SEA",
+  "roof" = "outdoors",
+  "half_seconds_remaining" = c(900),
+  "yardline_100" = 75,
+  "down" = 1,
+  "ydstogo" = 10,
+  "posteam_timeouts_remaining" = 3,
+  "defteam_timeouts_remaining" = 3
+)
+
+posteam_timeouts_remaining=c(3:0)
+defteam_timeouts_remaining=c(3:0)
+half_seconds_remaining=c(900,450,240,120)
+
+myvarset <- expand_grid(half_seconds_remaining,posteam_timeouts_remaining,
+                        defteam_timeouts_remaining)
+
+myvardf <- baseset %>% 
+  select(-names(myvarset)) %>% 
+  right_join(myvarset,by = character())
+
+alltos <- myvardf %>% 
+  nflfastR::calculate_expected_points() %>% 
+  arrange(posteam,roof,yardline_100) %>% 
+  mutate(posteam = factor(posteam,levels=c("SEA","KC"),labels=c("home","away")),
+         posteam_timeouts_remaining=factor(posteam_timeouts_remaining,levels=c("3","2","1","0")),
+         defteam_timeouts_remaining=factor(defteam_timeouts_remaining,levels=c("3","2","1","0")),
+         half_seconds_remaining=factor(half_seconds_remaining,levels=c("900","450","240","120"),
+                                       labels=c("900s","450s","240s","120s")))
+  
+alltostext <- paste("\nHalf Seconds Remaining: ",alltos$half_seconds_remaining, 
+                      "\nOffense Timeouts: ",alltos$posteam_timeouts_remaining,
+                      "\nDefense Timeouts: ",  alltos$defteam_timeouts_remaining,
+                      "\nExpected Points: ", round(alltos$ep,1))
+
+#  mutate(ints = cut(ep ,breaks = seq(from=0.4,to=1.8,by=.2)))
+alltosplot<- alltos %>% ggplot(aes(posteam_timeouts_remaining, defteam_timeouts_remaining, fill= ep,text=alltostext)) + 
+  geom_tile() +
+  scale_fill_gradient(low = "white", high = "red") +
+  geom_text(aes(label = round(ep, digits = 2)), color = "black", size = 3) +
+  facet_wrap(. ~ half_seconds_remaining) +
+  theme_bw() + 
+  xlab("Offensive Timeouts Left") + ylab("Defensive Timeouts Left") +
+  labs(fill="EP") 
+
+m_tos <- list(
+  l = 50,
+  r = 50,
+  b = 50,
+  t = 150,
+  pad = 4
+)
+
+## NEED: change height of legend (colorbar?)
+ggplotly(alltosplot, tooltip=c("alltostext"),height=600,width=600) %>% 
+  layout(title = list(text=paste0("Timeouts for Off/Def Team and Expected Points by Seconds<br>Remaining in Half",
+                                  "<br>","<sup>",
+                                  "1st & 10, 75yds to goal, home team, outdoors","</sup>"),x=0.01),font=t,margin=m_tos
+         )
+
+
+```
+
+::: callout-tip
+##### Cursory Observation
+
+-   Fewer timeouts for the defense earlier increases expected points for the office earlier in the game, but in late game situations, it reduces expected points scored by the office
+-   An offense with few timeouts late in the game is expected to score more
+-   Timeouts are probably a stand-in for game script, with teams using timeouts being a sign they're actively trying to score, especially at the end of the game if they're still in contention
+:::
+
+## **GAME-LEVEL FACTORS**
+
+### **Eras**
+
+#### Figure 6. Line plot
+
+```{r,echo=F,message=F,warning=F}
+### ERAs & Yardline (animate this one?)
+#start with base template  
+baseset <- tibble::tibble(
+  "season" = 2019,
+  "home_team" = c("SEA"),
+  "posteam" = c("SEA"),
+  "roof" = "outdoors",
+  "half_seconds_remaining" = c(900),
+  "yardline_100" = 75,
+  "down" = 1,
+  "ydstogo" = 10,
+  "posteam_timeouts_remaining" = 3,
+  "defteam_timeouts_remaining" = 3
+)
+
+yardline_100 = seq(99,0,-1)
+season=c(2001,2005,2013,2017,2022)
+posteam = c("SEA","KC")
+
+myvarset <- expand_grid(season,yardline_100,posteam)
+
+myvardf <- baseset %>% 
+  select(-names(myvarset)) %>% 
+  right_join(myvarset,by = character()) %>% 
+  mutate(ydstogo=ifelse(yardline_100 < 10,yardline_100,ydstogo))
+
+myarep <- myvardf %>% 
+  nflfastR::calculate_expected_points() %>% 
+  arrange(season,yardline_100) %>% 
+  mutate(season = factor(season,levels=c(2001,2005,2013,2017,2022),
+         labels=c("1999-2001","2002-2005","2006-2013","2014-2017","2018-present")),
+        posteam = factor(posteam,levels=c("SEA","KC"),labels=c("home","away   ")))
+
+downtext <- paste("Season: ", myarep$season,
+                  "\nYards to Endzone: ",  myarep$yardline_100,
+                  "\nExpected Points: ", round(myarep$ep,1))
+
+###ADD TEXT TO AESHETTIC!!
+myarrepplot <- myarep %>% 
+  ggplot(aes(text=downtext,group=season)) +
+  geom_line(aes(x=yardline_100, y=ep,color=season,alpha=as.numeric(season)),linewidth=1) + 
+  # geom_point(aes(x = yardline_100, 
+  #                y= ep,
+  #                color=as.character(posteam)),size=7) +
+  # geom_text(aes(label = paste(round(ep,1)), x = yardline_100, y = ep), #note thatI changed the greek letter Delta to "D:" because of encoding reasons
+  #           #            fill = "white",
+  #           color = "black",
+  #           size = 3) +
+  scale_x_reverse() +
+  labs(color="",alpha="Season") +
+  xlab("Yards to Goal") + 
+  ylab("EP") + 
+#  ylim(-2.5, 5.5) +
+  theme_minimal() +
+  facet_grid(. ~ posteam)
+
+m6 <- list(
+  l = 50,
+  r = 100,
+  b = 100,
+  t = 90,
+  pad = 4
+)
+
+#, width = 500, height = 500
+#ggplotly(myarrepplot,tooltip=c("downtext"),width=500,height=500) %>% 
+  ggplotly(myarrepplot,tooltip=c("downtext")) %>% 
+  layout(title=list(text=paste0("Yards to Goal and Expected Points by Season and Home/Away",
+                      '<br>',
+                      '<sup>',
+                      "1st & 10, Start of 2nd/4th qtr, All timeouts for both teams, outdoors",
+                      '</sup>'),x=0.01), font=t,margin = m6)
+
+```
+
+::: callout-tip
+##### Cursory Observation
+
+-   Older seasons are predicted to have slightly lower EP
+-   Season differences in EP are more pronounced for away team possessions
+:::
+
+### **Stadium Roof**
+
+#### Figure 7. Lollipop plot
+
+```{r ,echo=F,message=F,warning=F}
+###ROOF
+#start with base template  
+baseset <- tibble::tibble(
+  "season" = 2019,
+  "home_team" = c("SEA"),
+  "posteam" = "SEA",
+  "roof" = "outdoors",
+  "half_seconds_remaining" = c(900),
+  "yardline_100" = 75,
+  "down" = 1,
+  "ydstogo" = 10,
+  "posteam_timeouts_remaining" = 3,
+  "defteam_timeouts_remaining" = 3
+)
+
+#first, pick vars of interest
+yardline_100 = c(90,75,50,25,10)
+roof=c("outdoors","retractable","dome")
+posteam=c("SEA","KC")
+
+myvarset <- expand_grid(roof,posteam,yardline_100)
+
+myvardf <- baseset %>% 
+  select(-names(myvarset)) %>% 
+  right_join(myvarset,by = character())
+
+allroofs <- myvardf %>% 
+  nflfastR::calculate_expected_points() %>% 
+  arrange(posteam,roof,yardline_100) %>% 
+  mutate(posteam = factor(posteam,levels=c("SEA","KC"),labels=c("home","away")),
+         roof=factor(roof,levels=c("dome","retractable","outdoors")),
+         yardline_100=factor(yardline_100,levels=c("90","75","50","25","10")))
+
+rooftext <- paste("Home/Away: ",allroofs$posteam,"\nYds to End Zone: ",allroofs$yardline_100,
+                  "\nRoof: ",allroofs$roof,
+                  "\nExpected Points: ", round(allroofs$ep,3))
+
+allroofplot <- allroofs %>% 
+  ggplot( aes(text=rooftext)) +
+  geom_linerange(aes(x = yardline_100,
+                     ymin = 0, ymax = ep,
+                     color=roof),
+                     #linetype=posteam, group = interaction(roof, posteam)), position = position_dodge(width = 0.5)
+                     position = position_dodge(width = 0.75)
+                ) +
+  geom_point(aes(x=yardline_100, y=ep, color=roof,
+                 ), position = position_dodge(width = 0.75)) +
+  xlab("Yards to Goal") + 
+  ylab("EP") + 
+  labs(color="Stadium Type",linetype="Home/Away") +
+  coord_flip() +
+  theme_light() + 
+  facet_grid(posteam ~ .)
+
+m_tos <- list(
+  l = 100,
+  r = 300,
+  b = 100,
+  t = 90,
+  pad = 4
+)
+
+#need to resize
+ggplotly(allroofplot,tooltip=c("rooftext")) %>% 
+  layout(title=list(text=paste0("Stadium Roof, Home/Away, & Expected Points",
+                      '<br>',
+                      '<sup>',
+                      "Start of 2nd/4th qtr, 1st & 10, All timeouts",
+                      '</sup>'),x = 0.01),
+font=t,margin=m_tos,legend=list(x=1.20))
+
+```
+
+::: callout-tip
+### Cursory Observation
+
+-   Outdoor games reduce EP for the possessing team, dome games increase them
+:::
