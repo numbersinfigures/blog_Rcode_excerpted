@@ -13,7 +13,7 @@ library(tidyverse)
 library(plotly)
 library(viridis)
 
-#code extracted from blog post 10/5/23
+#code extracted from blog post 7/5/23
 
 ### BASELINE PLOT SETTINGS
 
@@ -38,7 +38,6 @@ t <- list(
 #### Figure 1. Heatmap
 
 ```{r ,echo=F,message=F,warning=F}
-### HALF SECONDS REMAINING
 baseset <- tibble::tibble(
   "season" = 2019,
   "home_team" = c("SEA"),
@@ -67,7 +66,6 @@ myarep <- myvardf %>%
   nflfastR::calculate_expected_points() %>% 
   arrange(posteam,half_seconds_remaining) %>% 
   mutate(posteam = factor(posteam,levels=c("SEA","KC"),labels=c("home","away")))
-#         yardline_100=factor(yardline_100,levels=c("90","75","50","25","10")))
 
 p <- myarep %>% 
   filter(posteam=="home") %>% 
@@ -83,13 +81,15 @@ meep <- ggplot(data=p,aes(x = half_seconds_remaining , y = yardline_100,fill=ep,
   geom_tile() + scale_x_reverse() +  scale_y_reverse() +
   scale_fill_viridis(option = "A") + theme_bw()
 
+# UPDATES TO GGPLOT SEEM TO HAVE BROKEN GGPLOTLY, WILL OUTPUT GGPLOT VERSION AS QUICK PATCH HERE UNTIL FIXED
+meep
+
 ggplotly(meep,tooltip=c("meeptext"),width=600,height=600) %>% 
   layout(title=list(text=paste0("Yards to Goal, Seconds Left in the Half, and Expected Points",
                       '<br>',
                       '<sup>',
                       "Home team, 1st & 10, No timeouts used, outdoors",
                       '</sup>'),x=0.01), font=t,margin = m)
-
 
 ```
 
@@ -156,6 +156,9 @@ meep <- pslice %>%
   xlab("Time Left in Half (s)") + ylab("EP") + labs(color="Yards to End Zone") +
   geom_line(linewidth=1) + scale_x_reverse() + 
   scale_color_brewer(palette = "Dark2") + theme_bw() + facet_grid(. ~ posteam)
+
+# NOTE: GGPLOT2 UPDATES BROKE PLOTLY, OUTPUTTING GGPLOT VERSION UNTIL FIXED
+meep
 
 ggplotly(meep,tooltip=c("meeptext"),width=600,height=600) %>% 
   layout(title=list(text=paste0("Seconds Left in the Half and Expected Points by Yards to Goal",
@@ -234,6 +237,9 @@ w <- myarep %>%
   #      caption = "This is the caption.") +
   coord_flip()
 
+# GGPLOT UPDATES BROKE GGPLOTLY, OUTPUTTING GGPLOT VERSION AS QUICK PATCH
+w
+
 ggplotly(w,tooltip=c("downtext")) %>% 
   layout(title=list(text=paste0("Downs with 10 yards to go, Yards to Goal, and Expected Points",
                       '<br>',
@@ -311,6 +317,9 @@ m_tos <- list(
   pad = 4
 )
 
+# GGPLOT UPDATE BROKE PLOTLY, PATCHING BY PLOTTING GGPLOT2 
+alltosplot
+
 ## NEED: change height of legend (colorbar?)
 ggplotly(alltosplot, tooltip=c("alltostext"),height=600,width=600) %>% 
   layout(title = list(text=paste0("Timeouts for Off/Def Team and Expected Points by Seconds<br>Remaining in Half",
@@ -373,7 +382,6 @@ downtext <- paste("Season: ", myarep$season,
                   "\nYards to Endzone: ",  myarep$yardline_100,
                   "\nExpected Points: ", round(myarep$ep,1))
 
-###ADD TEXT TO AESHETTIC!!
 myarrepplot <- myarep %>% 
   ggplot(aes(text=downtext,group=season)) +
   geom_line(aes(x=yardline_100, y=ep,color=season,alpha=as.numeric(season)),linewidth=1) + 
@@ -399,6 +407,9 @@ m6 <- list(
   t = 90,
   pad = 4
 )
+
+# GGPLOT UPDATE BROKE PLOTLY, PATCHING WITH GGPLOT VERSION UNTIL I FIND FIX
+myarrepplot
 
 #, width = 500, height = 500
 #ggplotly(myarrepplot,tooltip=c("downtext"),width=500,height=500) %>% 
@@ -485,7 +496,9 @@ m_tos <- list(
   pad = 4
 )
 
-#need to resize
+#GGPLOT BROKE PLOTLY, PATCHING BY PLOTTING GGPLOT2
+allroofplot
+
 ggplotly(allroofplot,tooltip=c("rooftext")) %>% 
   layout(title=list(text=paste0("Stadium Roof, Home/Away, & Expected Points",
                       '<br>',
