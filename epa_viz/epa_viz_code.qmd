@@ -1,8 +1,11 @@
 ---
-title: "epa_viz_code"
+title: "NFL Expected Points Added Model - Visualization"
 format: html
 editor: visual
 ---
+
+I'll use an established model predicting the expected points given the specific circumstances of a play before in starts. Those circumstances were linked to historical data on what the next score (e.g. possessing team TD, opposing team FG, end of half) ended up being, with the expected points essentially being the sum of the points from each possible outcome multiplied by the estimated probability of it happening. It was made available by the prolific and tireless producers of the [nflverse](https://nflverse.nflverse.com/) R package. As support, they've provided ample [documentation](https://www.opensourcefootball.com/posts/2020-09-28-nflfastr-ep-wp-and-cp-models/), and even a handy function to quickly output the expected points given all the terms. I also think that [NFELO](https://www.nfeloapp.com/analysis/expected-points-added-epa-nfl/) provides a nice overview of how it's used, so you can check them out.
+
 Below, I walk through a number of predictors in the model, holding others steady, to get an impression of how each impacts the model predictions.
 
 ```{r setup, include=FALSE, echo=FALSE, message=FALSE}
@@ -81,9 +84,6 @@ meep <- ggplot(data=p,aes(x = half_seconds_remaining , y = yardline_100,fill=ep,
   geom_tile() + scale_x_reverse() +  scale_y_reverse() +
   scale_fill_viridis(option = "A") + theme_bw()
 
-# UPDATES TO GGPLOT SEEM TO HAVE BROKEN GGPLOTLY, WILL OUTPUT GGPLOT VERSION AS QUICK PATCH HERE UNTIL FIXED
-meep
-
 ggplotly(meep,tooltip=c("meeptext"),width=600,height=600) %>% 
   layout(title=list(text=paste0("Yards to Goal, Seconds Left in the Half, and Expected Points",
                       '<br>',
@@ -156,9 +156,6 @@ meep <- pslice %>%
   geom_line(linewidth=1) + scale_x_reverse() + 
   scale_color_brewer(palette = "Dark2") + theme_bw() + facet_grid(. ~ posteam)
 
-# NOTE: GGPLOT2 UPDATES BROKE PLOTLY, OUTPUTTING GGPLOT VERSION UNTIL FIXED
-meep
-
 ggplotly(meep,tooltip=c("meeptext"),width=600,height=600) %>% 
   layout(title=list(text=paste0("Seconds Left in the Half and Expected Points by Yards to Goal",
                       '<br>',
@@ -226,9 +223,6 @@ w <- myarep %>%
   theme_minimal() +
   theme(plot.caption = element_text(hjust = 0)) + # set the left align here
   coord_flip()
-
-# GGPLOT UPDATES BROKE GGPLOTLY, OUTPUTTING GGPLOT VERSION AS QUICK PATCH
-w
 
 ggplotly(w,tooltip=c("downtext")) %>% 
   layout(title=list(text=paste0("Downs with 10 yards to go, Yards to Goal, and Expected Points",
@@ -305,9 +299,6 @@ m_tos <- list(
   t = 150,
   pad = 4
 )
-
-# GGPLOT UPDATE BROKE PLOTLY, PATCHING BY PLOTTING GGPLOT2 
-alltosplot
 
 ## NEED: change height of legend (colorbar?)
 ggplotly(alltosplot, tooltip=c("alltostext"),height=600,width=600) %>% 
@@ -388,9 +379,6 @@ m6 <- list(
   t = 90,
   pad = 4
 )
-
-# GGPLOT UPDATE BROKE PLOTLY, PATCHING WITH GGPLOT VERSION UNTIL I FIND FIX
-myarrepplot
 
 #, width = 500, height = 500
 #ggplotly(myarrepplot,tooltip=c("downtext"),width=500,height=500) %>% 
@@ -476,9 +464,6 @@ m_tos <- list(
   t = 90,
   pad = 4
 )
-
-#GGPLOT BROKE PLOTLY, PATCHING BY PLOTTING GGPLOT2
-allroofplot
 
 ggplotly(allroofplot,tooltip=c("rooftext")) %>% 
   layout(title=list(text=paste0("Stadium Roof, Home/Away, & Expected Points",
