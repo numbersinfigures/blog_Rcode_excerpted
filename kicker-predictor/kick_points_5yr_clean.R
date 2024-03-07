@@ -1,10 +1,4 @@
-#fantasy kickers
-#what we'l need to predict the model:
-# current task: split traaining/testing for svm to be like xgboost
-# check wind NAs, weather NAs -- how to fill games without weather listed
-
-#status: bring in red zone again?
-#random questions: how does 4th down vars list off penalties
+# Kicker Fantasy Points Estmator
 
 library(tidyverse)
 library(nflverse)
@@ -22,16 +16,16 @@ library(gt)
 #data_2019 <- load_pbp(2019)
 #data_2017_2018 <- load_pbp(2017:2018)
 
+#env above saved as Rdata Workspaace
+load("~/kickerspace.RData")
+
 # retrieved extra data in some missing roof status for retractables by looking at NFL game logs 
 #(e.g. https://static.www.nfl.com/gamecenter/ba0fb3e6-d24c-11ec-b23d-d15a91047884.pdf)
 # or Pro Football Reference
 # (e.g. https://www.pro-football-reference.com/boxscores/202212040cin.htm)
-# @ home: stored in "datasources"
 
+setwd("kicker-predictor")
 retractroof_2021 <- read_csv("retractroof_2021.csv")
-
-#env above saved as Rdata Workspaace
-load("~/kickerspace.RData")
 
 data %<>%
   bind_rows(data_2019) %>%
@@ -51,25 +45,22 @@ data %<>%
   mutate(roof = ifelse(is.na(roof) & season==2021,roof_update,roof))
 
 # EXTRACT Weather data to pull precipitation and wind speed and do some extra cleaning
-#ws_pattern <-  '(?<=Wind: [A-Za-z,\\\\]{0,20}\\ )[0-9]{0,2}'
 ws_pattern <- "(?<=Wind:\\D{0,30})\\d{1,2}"
-#ws_pattern <-  '(?<=Wind: [\\d]{0,20}\\ )[0-9]{0,2}'
-
-#weather_pattern <- '^[A-Za-z\\s]+(?= Temp)'
 weather_pattern <- '^[:print:]+(?= Temp)'
 
-#trying to add some
 data %<>% 
   mutate(wind_weather = str_extract(weather,ws_pattern),
          weather_desc = str_extract(weather,weather_pattern)) %>% 
   #fix calm days to have zero wind
   mutate(wind_weather = ifelse(str_detect(weather,"Calm"),"0",wind_weather)) %>% 
   mutate(weather_desc = ifelse(str_detect(weather_desc,"(N|n)/(A|a)")==TRUE,NA,weather_desc)) %>% 
+  #use descriptions to separate into precipitation present, absent, NA 
   mutate(precipitation = case_when(str_detect(weather_desc,"(C|c)hance|(C|c)hange|Threat|Expected|likely|Forecasted")==TRUE & 
                                      str_detect(weather_desc,"Raining")==FALSE ~ NA,
                                     str_detect(weather_desc,"(R|r)ain|(S|s)now|(S|s)hower|(D|d)rizzle|storms")==TRUE ~ "yes",
                                    is.na(weather_desc) ~ NA,
                                    TRUE ~ "no")) %>% 
+  # assign no preceiptation to closed roof arenas
   mutate(precipitation = ifelse(roof %in% c("dome","closed") & is.na(precipitation),"no",precipitation),
          wind_weather = ifelse(roof %in% c("dome","closed") & is.na(wind_weather),0,wind_weather)) %>%
   #fix stray games with missing wind_weather
@@ -89,11 +80,12 @@ data %<>%
          wind_weather = ifelse(game_id=="2017_10_HOU_LA",0,wind_weather),
          wind_weather = ifelse(game_id=="2017_14_PHI_LA",0,wind_weather)) %>% 
   mutate(wind_weather = ifelse(is.na(wind_weather) & home_team=="ATL",4.36,wind_weather)) %>% 
-  #for precipitation, there's a fair number missing, so we'll do unk
+  #for precipitation, there's a fair number missing, so we'll do unknown category
   mutate(precipitation = ifelse(is.na(precipitation),"unknown",precipitation),
          wind_weather = as.numeric(wind_weather))
 
 ww <- data %>% select(game_id,weather,weather_desc,wind,wind_weather,roof)
+
 #check for precipitation descriptors to edit the data step above
 #unique(ww$weather_desc)
 
@@ -101,12 +93,6 @@ ww <- data %>% select(game_id,weather,weather_desc,wind,wind_weather,roof)
 nowind_weather <- ww %>% 
   filter(is.na(wind_weather)) %>% 
   count(game_id,weather,roof)
-  #filter(str_detect(weather,"(?<=Wind:\\D{0,30})Calm"))
-
-# precip_words = c("Rainy","Rain","Cloudy with showers","Cloudy with snow flurries",
-#                  "Snow","Showers","Snow shower","Light Rain","Mostly Cloudy with 
-#                  Light Rain Forecasted","Rain showers")
-#precip_string = c("(R|r)ain|(S|s)now|(S|s)howers") 
 
 # START data manipulation
 # create full list of each week's teams so that 0 kick weeks aren't dropped later
@@ -115,8 +101,8 @@ game_posteams <- data %>%
   count(season,game_id,posteam,home_team) %>% 
   select(-n)
 
-# FORK 1: CREATE AVERAGES USING THAT SEASON'S DATA
-#create kick-level data and summarize to game_level
+# FORK 1: CREATE AVERAGES USING SEASON DATA (ultimately ignored)
+# create kick-level data and summarize to game_level
 kicks <- data %>%
   select(season,game_id,field_goal_result,kick_distance,kicker_player_id,
          kicker_player_name,extra_point_result,home_team,posteam) %>% 
@@ -145,8 +131,6 @@ kicks <- data %>%
     kickers_per_team = n_distinct(kicker_player_id),
     kicker_id = first(kicker_player_id),
     kicker_name = first(kicker_player_name)
-    # ,
-    # kicker_home = max(home_kick)
   ) %>%
   mutate(max_made_dist = ifelse(n_fg==0 & n_xp==0,NA,max_made_dist)) %>% 
   right_join(game_posteams,by=c("season","game_id","posteam","home_team")) %>%
@@ -169,7 +153,6 @@ kicks <- data %>%
          kicker_szn_xp_att = sum(n_xp_att),
          kicker_szn_max_dist = max(max_dist,na.rm=TRUE),
          kicker_szn_max_made_dist = max(max_made_dist,na.rm=TRUE)) %>% 
-  #filter(kicker_szn_fg_att > 0 & kicker_szn_xp_att > 0) %>% 
   mutate(kicker_szn_fg_pct = kicker_szn_fg_made/kicker_szn_fg_att,
          kicker_szn_xp_pct = kicker_szn_xp_made/kicker_szn_xp_att,
          kicker_szn_max_made_dist = ifelse(kicker_szn_fg_made == 0 &
@@ -189,7 +172,7 @@ max_dist_impute <- kicks %>%
   summarize(max_dist_to_impute = median(kicker_szn_max_dist),
             max_made_dist_to_impute = median(kicker_szn_max_made_dist)) 
 
-# SIDEQUEST: quick plot to select a min attempt number
+# SIDEQUEST: quick plot to select a minimum attempt number
 # kicks %>%
 #   group_by(season,kicker_name,kicker_id) %>% 
 #   summarize(kicker_szn_fg_att=mean(kicker_szn_fg_att),
@@ -235,16 +218,8 @@ kicker_szn <- kicks_impute %>%
          sznlag_kicker_szn_max_dist = lag(kicker_szn_max_dist),
          sznlag_kicker_szn_max_made_dist = lag(kicker_szn_max_made_dist)) %>% 
   group_by(season) %>%
-  # mutate(szn_max_dist = median(kicker_szn_max_dist,na.rm=T),
-  #        szn_max_made_dist = median(kicker_szn_max_made_dist,na.rm=T)) %>%
-  # group_by(kicker_id,kicker_name) %>%
-  # arrange(kicker_id,kicker_name,season) %>%
-  # mutate(lag_szn_max_dist = lag(szn_max_dist),
-  #         lag_szn_max_made_dist = lag(szn_max_made_dist)) %>%
   select(kicker_id,kicker_name,season,sznlag_kicker_szn_fg_pct,sznlag_kicker_szn_xp_pct,
          sznlag_kicker_szn_max_dist,sznlag_kicker_szn_max_made_dist
-         # ,
-         # lag_szn_max_dist,lag_szn_max_made_dist
          )
 
 # create lagged season values
@@ -274,7 +249,7 @@ kicks_mv <- kicks %>%
   arrange(kicker_name,kicker_id,season,game_id) %>% 
   select(kicker_name,kicker_id,season,game_id,
          n_fg,n_fg_att,n_xp,n_xp_att,max_dist,max_made_dist) %>%
-  #fill NA max_dists for no-attempt games
+  #fill NA max_dists for 0-attempt games
   mutate(max_dist=ifelse(is.na(max_dist) & n_fg_att==0 & n_xp_att==0,
                            0,max_dist),
          max_made_dist= ifelse(is.na(max_made_dist) & n_fg==0 & n_xp==0,
@@ -331,20 +306,21 @@ game_level <- data %>%
            total_line,spread_line,pos_imptot,def_imptot,pos_imptotdiff,home_score,away_score) %>% 
   summarize(playcount = n(),fg_atts = sum(field_goal_result=="made",na.rm=TRUE),xp_atts=sum(extra_point_result=="good",na.rm=TRUE))
 
-# FULL SEASON SEASON-LEVEL VARIABLES
-#calculate season-level redzone efficiency, yellow zone efficiency
+# PREDICTOR CLASS 1: FULL SEASON SEASON-LEVEL VARIABLES
+# Downside: these create averages that include information on the week being predicted
+# Ultimately not reported for this reason
+# calculate season-level redzone efficiency, "pink zone" efficiency
 season_level <- data %>% 
-  #dplyr::filter(season_type == "REG") %>%
   dplyr::group_by(posteam,season) %>% 
-  #need to carry fourth_down N because we subset special teams away next
+#need to carry fourth_down N because we subset special teams plays away next
   mutate(fourth_down = ifelse(down==4,1,0),
          fourth_down_n = sum(fourth_down,na.rm=T)) %>% 
   dplyr::filter(!is.na(posteam),(rush == 1 | pass == 1 | penalty == 1),
                 special_teams_play==0) 
-#this includes penalties
+#this includes penalties because I wanted that as part of offensive production stats
 
 zone_offense <- season_level %>%
-  #play_level: identify relevant plays for specific instances
+  #play_level: identify relevant plays for specific situations
   mutate(redzone_epa = ifelse(yardline_100 < 20,epa,NA),
          pinkzone_epa = ifelse(yardline_100 < 40 & yardline_100 >= 20,epa,NA),
          big_play_20 = ifelse(yards_gained >= 20,1,0),
@@ -354,19 +330,18 @@ zone_offense <- season_level %>%
            pass == 1 ~ "pass",
            TRUE ~ "other")
          ) %>% 
-  #i'm leaving special teams plays in for now because penalties, punting?
+  #i'm leaving special teams plays in for now because penalties, punting
   dplyr::mutate(off_rz_epa = mean(redzone_epa, na.rm = TRUE),
-                   off_pz_epa = mean(pinkzone_epa, na.rm = TRUE),
+                off_pz_epa = mean(pinkzone_epa, na.rm = TRUE),
                 off_epa = mean(epa, na.rm=TRUE)
                 ) %>% 
-  #I was weeding out "other" before, but penalties should be informative
+# was weeding out "other" before, but penalties should be informative
   #filter(rushpass != "other") %>% 
-  #group_by(team,season,rushpass) %>% 
   mutate(off_rush_epa = ifelse(rushpass == "rush",epa,NA),
          off_pass_epa = ifelse(rushpass == "pass",epa,NA),
          fourth_down_att = fourth_down_converted + fourth_down_failed,
          nplays = n()) %>% 
-  #epa means are just means of same number because already calc'd at season-level
+  #epa means here are just means of same number because already calc'd at season-level
   summarise(off_rz_epa = mean(off_rz_epa, na.rm = TRUE),
             off_pz_epa = mean(off_pz_epa, na.rm = TRUE),
             off_epa = mean(epa, na.rm = TRUE),
@@ -396,38 +371,20 @@ zone_defense <- season_level %>%
   arrange(season,defteam,week) %>%
   mutate(def_rush_epa = ifelse(rushpass == "rush",epa,NA),
          def_pass_epa = ifelse(rushpass == "pass",epa,NA)) %>% 
-  # group_by(season,defteam) %>% 
   dplyr::summarize(def_rz_epa = mean(redzone_epa, na.rm = TRUE),
                    def_pz_epa = mean(pinkzone_epa, na.rm = TRUE),
                    def_epa = mean(epa, na.rm = TRUE),
-                   # n_def_rz = sum(!is.na(redzone_epa)),
-                   # n_def_pz = sum(!is.na(pinkzone_epa)),
                    n_plays = n(),
                    def_success_rate = sum(success,na.rm = TRUE)/n_plays,
                    def_rush_epa = mean(def_rush_epa, na.rm = TRUE),
                    def_pass_epa = mean(def_pass_epa, na.rm = TRUE)
-                   # ,
-                   # n_def_rush = sum(rushpass=="rush"),
-                   # n_def_pass = sum(rushpass=="pass")
                    ) 
-# %>% 
-#   mutate(def_rz_epa_ma = lag(cummean(def_rz_epa))/lag(cummean(n_def_rz)),
-#          def_pz_epa_ma = lag(cummean(def_pz_epa))/lag(cummean(n_def_pz)),
-#          def_epa_ma = lag(cummean(def_epa))/lag(cummean(n_plays)),
-#          def_rush_epa_ma = lag(cummean(def_rush_epa))/lag(cummean(n_def_rush)),
-#          def_pass_epa_ma = lag(cummean(def_pass_epa))/lag(cummean(n_def_pass))
-#   ) %>% 
-#   group_by(defteam) %>% 
-#   arrange(defteam,season,week) %>% 
-#   fill(def_rz_epa_ma,def_pz_epa_ma,def_epa_ma,def_rush_epa_ma,def_pass_epa_ma) %>% 
-#   select(defteam,season,week,
-#          def_rz_epa_ma,def_pz_epa_ma,def_epa_ma,def_rush_epa_ma,def_pass_epa_ma)
 
 pos_def <- zone_defense %>% 
   select(defteam,season,def_epa,def_success_rate) %>% 
   rename(pos_def_epa = def_epa,posteam = defteam,pos_def_success_rate = def_success_rate)
 
-# FORK 2: Cumulative avgs to make predictors blind to future results
+# PREDICTOR CLASS 2: Cumulative avgs to blind predictors to future results
 zone_offense_mvavg <- season_level %>%
   mutate(redzone_epa = ifelse(yardline_100 < 20,epa,NA),
          pinkzone_epa = ifelse(yardline_100 < 40 & yardline_100 >= 20,epa,NA),
@@ -440,23 +397,12 @@ zone_offense_mvavg <- season_level %>%
   ) %>% 
   group_by(season,posteam,week) %>%
   arrange(season,posteam,week) %>% 
-  #i'm leaving special teams plays in for now because penalties, punting?
-  # dplyr::mutate(off_rz_epa = sum(redzone_epa, na.rm = TRUE),
-  #                  off_pz_epa = sum(pinkzone_epa, na.rm = TRUE),
-  #               n_off_rz = sum(!is.na(redzone_epa)),
-  #               n_off_pz = sum(!is.na(pinkzone_epa))
-  #               ) %>% 
-  #I was weeding out "other" before, but penalties should be informative
-  #filter(rushpass != "other") %>% 
-  #group_by(team,season,rushpass) %>% 
+  #i'm leaving special teams plays in for now because penalties, punting
   mutate(off_rush_epa = ifelse(rushpass == "rush",epa,NA),
          off_pass_epa = ifelse(rushpass == "pass",epa,NA),
          fourth_down_att = fourth_down_converted + fourth_down_failed,
          fourth_down_n = sum(fourth_down,na.rm=T)
-         # ,
-         # nplays = n()
          ) %>% 
-  #i'm leaving special teams plays in for now because penalties, punting?
   dplyr::summarize(off_rz_epa = sum(redzone_epa, na.rm = TRUE),
                 off_pz_epa = sum(pinkzone_epa, na.rm = TRUE),
                 n_off_rz = sum(!is.na(redzone_epa)),
@@ -541,64 +487,64 @@ pos_def_mvavg <- zone_defense_mvavg %>%
   select(defteam,season,week,def_epa_ma,def_success_rate_ma) %>% 
   rename(pos_def_epa_ma = def_epa_ma,posteam = defteam,pos_def_success_rate_ma = def_success_rate_ma)
 
-#call DVOAs
-defdvoa2020 <- read_csv("C:\\Users\\chknd\\Documents\\total_team_dvoa_2020.csv") %>% 
-  select(-Rank) %>% 
-  rename_with(str_to_title) %>% 
-  mutate(season=2020) %>% 
-  #rename(c("Team"="?..Team")) %>% 
-  rename(c("Total.dvoa" = "Total Dvoa","Offense.dvoa" = "Offense Dvoa",
-           "Defense.dvoa" = "Defense Dvoa", "Weighted.dvoa" = "Weighted Dvoa")) %>% 
-  select(season, Team, Total.dvoa, Offense.dvoa, Defense.dvoa, Weighted.dvoa)
+# ORIGINAL ANALYSIS INCLUDED SEASON-LEVEL DVOA FROM
+# https://www.ftnfantasy.com/ BUT ULTIMATELY DIDN"T USE
 
-defdvoa2021 <- read_csv("C:\\Users\\chknd\\Documents\\total_team_dvoa_2021.csv") %>% 
-  select(-Rank) %>% 
-  rename_with(str_to_title) %>% 
-  mutate(season=2021) %>% 
-  #rename(c("Team"="?..Team")) %>% 
-  rename(c("Total.dvoa" = "Total Dvoa","Offense.dvoa" = "Offense Dvoa",
-           "Defense.dvoa" = "Defense Dvoa", "Weighted.dvoa" = "Weighted Dvoa")) %>% 
-  select(season, Team, Total.dvoa, Offense.dvoa, Defense.dvoa, Weighted.dvoa)
+# #call DVOAs
+# defdvoa2020 <- read_csv("total_team_dvoa_2020.csv") %>% 
+#   select(-Rank) %>% 
+#   rename_with(str_to_title) %>% 
+#   mutate(season=2020) %>% 
+#   #rename(c("Team"="?..Team")) %>% 
+#   rename(c("Total.dvoa" = "Total Dvoa","Offense.dvoa" = "Offense Dvoa",
+#            "Defense.dvoa" = "Defense Dvoa", "Weighted.dvoa" = "Weighted Dvoa")) %>% 
+#   select(season, Team, Total.dvoa, Offense.dvoa, Defense.dvoa, Weighted.dvoa)
+# 
+# defdvoa2021 <- read_csv("total_team_dvoa_2021.csv") %>% 
+#   select(-Rank) %>% 
+#   rename_with(str_to_title) %>% 
+#   mutate(season=2021) %>% 
+#   #rename(c("Team"="?..Team")) %>% 
+#   rename(c("Total.dvoa" = "Total Dvoa","Offense.dvoa" = "Offense Dvoa",
+#            "Defense.dvoa" = "Defense Dvoa", "Weighted.dvoa" = "Weighted Dvoa")) %>% 
+#   select(season, Team, Total.dvoa, Offense.dvoa, Defense.dvoa, Weighted.dvoa)
+# 
+# defdvoa2022 <- read_csv("total_team_dvoa_2022.csv") %>% 
+#   select(-Rank) %>% 
+#   rename_with(str_to_title) %>% 
+#   mutate(season=2022) %>% 
+#   #rename(c("Team"="?..Team")) %>%   
+#   rename(c("Total.dvoa" = "Total Dvoa","Offense.dvoa" = "Offense Dvoa",
+#   "Defense.dvoa" = "Defense Dvoa", "Weighted.dvoa" = "Weighted Dvoa")) %>% 
+#   select(season, Team, Total.dvoa, Offense.dvoa, Defense.dvoa, Weighted.dvoa)
+# 
+# defdvoa2023 <- read_csv("total_team_dvoa_2023full.csv") %>% 
+#   select(-Rank) %>% 
+#   rename_with(str_to_title) %>% 
+#   mutate(season=2023) %>% 
+#   #rename(c("Team"="?..Team")) %>% 
+#   rename(c("Total.dvoa" = "Total Dvoa","Offense.dvoa" = "Offense Dvoa",
+#            "Defense.dvoa" = "Defense Dvoa", "Weighted.dvoa" = "Weighted Dvoa")) %>% 
+#   select(season, Team, Total.dvoa, Offense.dvoa, Defense.dvoa, Weighted.dvoa) %>% 
+#   mutate(Team=ifelse(Team=="JAC","JAX",Team))
+# 
+# defdvoa <- defdvoa2020 %>% 
+#   bind_rows(defdvoa2021,defdvoa2022,defdvoa2023) %>% 
+#   mutate(Team=ifelse(Team=="JAC","JAX",Team))
 
-defdvoa2022 <- read_csv("C:\\Users\\chknd\\Documents\\total_team_dvoa_2022.csv") %>% 
-  select(-Rank) %>% 
-  rename_with(str_to_title) %>% 
-  mutate(season=2022) %>% 
-  #rename(c("Team"="?..Team")) %>%   
-  rename(c("Total.dvoa" = "Total Dvoa","Offense.dvoa" = "Offense Dvoa",
-  "Defense.dvoa" = "Defense Dvoa", "Weighted.dvoa" = "Weighted Dvoa")) %>% 
-  select(season, Team, Total.dvoa, Offense.dvoa, Defense.dvoa, Weighted.dvoa)
-
-defdvoa2023 <- read_csv("C:\\Users\\chknd\\Documents\\total_team_dvoa_2023full.csv") %>% 
-  select(-Rank) %>% 
-  rename_with(str_to_title) %>% 
-  mutate(season=2023) %>% 
-  #rename(c("Team"="?..Team")) %>% 
-  rename(c("Total.dvoa" = "Total Dvoa","Offense.dvoa" = "Offense Dvoa",
-           "Defense.dvoa" = "Defense Dvoa", "Weighted.dvoa" = "Weighted Dvoa")) %>% 
-  select(season, Team, Total.dvoa, Offense.dvoa, Defense.dvoa, Weighted.dvoa) %>% 
-  mutate(Team=ifelse(Team=="JAC","JAX",Team))
-
-defdvoa <- defdvoa2020 %>% 
-  bind_rows(defdvoa2021,defdvoa2022,defdvoa2023) %>% 
-  mutate(Team=ifelse(Team=="JAC","JAX",Team))
-
-#overall_kkr_mean = mean(kicks_impute$total_points,na.rm=T)
+# OVERALL KICKER POINTS FOR IMPUTATION PURPOSES
 overall_kkr_mean <- kicks_impute %>% 
   filter(season > 2017) %>% 
   ungroup() %>% 
   summarize(overall_kkr_mean=mean(total_points,na.rm=T)) %>%
   pull(overall_kkr_mean)
 
-# Combine data 
+# COMBINE ALL DATA INTO ONE DATASET
 final_data <- game_level %>% 
   right_join(kicks_impute,by=c("season","game_id","posteam")) %>% 
   left_join(kicks_mv, by= c("season","kicker_id","kicker_name","game_id")) %>% 
   group_by(season,posteam) %>% 
   arrange(kicker_id,kicker_name,game_id) %>% 
-  #to fill if first kicker 
-  # fill(c("kicker_home","kicker_szn_fg_pct","kicker_szn_xp_pct","kicker_szn_max_dist"), .direction = "downup") %>% 
-  #next, get cumulative means for a team given up to kickers, and specifically for kickers
   group_by(season,defteam) %>%
   arrange(season,defteam,game_id) %>% 
   mutate(szn_def_kkr_mean_pts = lag(cummean(total_points))) %>% 
@@ -610,10 +556,8 @@ final_data <- game_level %>%
          szn_kkr_mean_pts = ifelse(is.na(szn_kkr_mean_pts),
                                        overall_kkr_mean,szn_kkr_mean_pts),
          week = as.numeric(str_sub(game_id,6,7))) %>% 
-  #back to combining 
   group_by(season,posteam) %>% 
   arrange(season,posteam,week) %>% 
-  #had "posteam" = "team" here for some reason?
   left_join(zone_offense,by=c("season","posteam")) %>% 
   left_join(zone_defense,by=c("season", "defteam")) %>%
   left_join(zone_offense_mvavg,by=c("season","posteam" ,"week")) %>% 
@@ -623,12 +567,6 @@ final_data <- game_level %>%
   left_join(def_off_mvavg,by=c("season","defteam","week")) %>% 
   left_join(pos_def_mvavg,by=c("season","posteam","week")) %>%  
   ungroup() %>% 
-  full_join(defdvoa,by=c("season","posteam" = "Team")) %>% 
-  rename("Pos_Total_DVOA"="Total.dvoa","Pos_Offense_DVOA"="Offense.dvoa","Pos_Defense_DVOA"=
-           "Defense.dvoa","Pos_Wtd_DVOA"="Weighted.dvoa") %>% 
-  full_join(defdvoa,by=c("season","defteam" = "Team")) %>% 
-  rename("Def_Total_DVOA"="Total.dvoa","Def_Offense_DVOA"="Offense.dvoa","Def_Defense_DVOA"=
-           "Defense.dvoa","Def_Wtd_DVOA"="Weighted.dvoa") %>% 
   mutate(roof=ifelse(is.na(roof),"retractable",roof),
          total_points = ifelse(fg_atts==0 & xp_atts==0,0,total_points)) %>% 
   dummy_cols(select_columns=c("roof","precipitation"),remove_most_frequent_dummy = TRUE) %>% 
@@ -643,16 +581,20 @@ final_data <- game_level %>%
   filter(season > 2017) %>% 
   filter(!((week == 18 & season > 2020) | (week == 17 & season == 2020)))
 
-#modeling
+# IDENTIFYING MODEL INPUTS
+# OUTCOME:
 outcome_name = "total_points"
-Cov_old_set = c("pos_imptot","def_imptot",
+
+# PREDICTORS: 
+#play_clock only limited time
+Cov_full_set = c("pos_imptot","def_imptot",
             "pos_imptotdiff","week","season",
             "kicker_szn_max_dist","kicker_home","kicker_szn_fg_pct","kicker_szn_xp_pct",
             "off_epa","off_rz_epa","off_pz_epa","off_rush_epa","off_pass_epa",
             "def_epa",
-            #"def_rz_epa","def_pz_epa","def_rush_epa","def_pass_epa",
+            "def_rz_epa","def_pz_epa","def_rush_epa","def_pass_epa",
             "big_play_20_rate","neg_play_5_rate",
-            #"fourth_down_try_rate",
+            "fourth_down_try_rate",
             "off_success_rate","def_success_rate","pos_def_success_rate","def_off_success_rate",
             #"mean_play_clock","mean_play_clock_ma",
             "szn_def_kkr_mean_pts","szn_kkr_mean_pts",
@@ -669,83 +611,39 @@ Cov_ma_set = c("pos_imptot","def_imptot",
             "pos_def_epa_ma","def_off_epa_ma",
             "off_success_rate_ma","def_success_rate_ma","pos_def_success_rate_ma","def_off_success_rate_ma",
             "big_play_20_rate_ma","neg_play_5_rate_ma","fourth_down_try_rate_ma",
-            #"mean_play_clock","mean_play_clock_ma",
             "szn_def_kkr_mean_pts","szn_kkr_mean_pts",
-            #"Pos_Offense_DVOA","Pos_Defense_DVOA","Def_Offense_DVOA","Def_Defense_DVOA",
             "roof_closed","roof_dome","roof_open",
             "wind_weather","precipitation_unknown","precipitation_yes")
 
 Cov_ma_small = c("pos_imptot","def_imptot",
                "week","season",
                "max_dist_mv","kicker_home","fg_pct_mv","xp_pct_mv",
-               #"off_epa_ma","off_rz_epa_ma","off_pz_epa_ma",
-               #"off_rush_epa_ma","off_pass_epa_ma",
-               #"def_epa_ma","def_rz_epa_ma","def_pz_epa_ma",
-               #"def_rush_epa_ma","def_pass_epa_ma",
-               #"pos_def_epa_ma","def_off_epa_ma",
-               #"off_success_rate_ma","def_success_rate_ma","pos_def_success_rate_ma","def_off_success_rate_ma",
-               #"big_play_20_rate_ma","neg_play_5_rate_ma",
                "fourth_down_try_rate_ma",
-               #"mean_play_clock","mean_play_clock_ma",
                "szn_def_kkr_mean_pts","szn_kkr_mean_pts",
-               #"Pos_Offense_DVOA","Pos_Defense_DVOA","Def_Offense_DVOA","Def_Defense_DVOA",
                "roof_closed","roof_dome","roof_open",
                "wind_weather","precipitation_unknown","precipitation_yes")
 
-Cov_ma_smaller = c("pos_imptot","def_imptot",
-                 "week","season",
-                 #"max_dist_mv","fg_pct_mv",
-                 #"kicker_home","xp_pct_mv",
-                 #"off_epa_ma","off_rz_epa_ma",
-                 "off_pz_epa_ma",
-                 #"off_rush_epa_ma","off_pass_epa_ma",
-                 #"def_epa_ma","def_rz_epa_ma",
-                 "def_pz_epa_ma",
-                 #"def_rush_epa_ma","def_pass_epa_ma",
-                 #"pos_def_epa_ma","def_off_epa_ma",
-                 #"off_success_rate_ma","def_success_rate_ma","pos_def_success_rate_ma","def_off_success_rate_ma",
-                 #"big_play_20_rate_ma","neg_play_5_rate_ma",
-                 "fourth_down_try_rate_ma",
-                 #"mean_play_clock","mean_play_clock_ma",
-                 #"szn_def_kkr_mean_pts","szn_kkr_mean_pts",
-                 #"Pos_Offense_DVOA","Pos_Defense_DVOA","Def_Offense_DVOA","Def_Defense_DVOA",
-                 "roof_closed","roof_dome","roof_open",
-                 "wind_weather","precipitation_unknown","precipitation_yes")
-
+#adds final score to examine predictive value of some future knowledge
 Cov_ma_finalscore = c("pos_score","def_score",
                  "week","season",
                  "max_dist_mv","kicker_home","fg_pct_mv","xp_pct_mv",
-                 #"off_epa_ma","off_rz_epa_ma","off_pz_epa_ma",
-                 #"off_rush_epa_ma","off_pass_epa_ma",
-                 #"def_epa_ma","def_rz_epa_ma","def_pz_epa_ma",
-                 #"def_rush_epa_ma","def_pass_epa_ma",
-                 #"pos_def_epa_ma","def_off_epa_ma",
-                 #"off_success_rate_ma","def_success_rate_ma","pos_def_success_rate_ma","def_off_success_rate_ma",
-                 #"big_play_20_rate_ma","neg_play_5_rate_ma",
                  "fourth_down_try_rate_ma",
-                 #"mean_play_clock","mean_play_clock_ma",
                  "szn_def_kkr_mean_pts","szn_kkr_mean_pts",
-                 #"Pos_Offense_DVOA","Pos_Defense_DVOA","Def_Offense_DVOA","Def_Defense_DVOA",
                  "roof_closed","roof_dome","roof_open",
                  "wind_weather","precipitation_unknown","precipitation_yes")
 
 Cov_set = Cov_ma_small
 
-# Cov_set = c("pos_imptot","def_imptot","pos_imptotdiff","kicker_szn_max_dist","kicker_home","kicker_szn_fg_pct",
-#             "kicker_szn_xp_pct",
-#             "roof_closed","roof_dome","roof_open",
-#             "roof_retractable")
-
+#used for IDing clusters for GRF testing
 cluster_id <- final_data %>%
   select(posteam_seas) %>% 
   group_by(posteam_seas) %>%
   dplyr::mutate(pos_seas = cur_group_id()) %>% 
   pull(pos_seas)
 
+# CREATE FINAL TRAINING DATASET
 final_train <- final_data %>% 
   filter(season < 2023)
-#the only missings are for max_dist, which we don't use in model
-#extra arrangement for final dataset
 
 Y <- pull(final_train[,outcome_name])
 
@@ -754,12 +652,11 @@ X_final <- final_train %>%
   mutate_at(c("roof_dome", "roof_open", "roof_closed", 
               "precipitation_unknown","precipitation_yes"),as.logical) 
 
-#quick function to check missing variables each columns
+# quick function to check missing variables each columns
 chkna <- function(x){sum(is.na(x))}
 na_chking <- X_final %>% summarise_all(chkna)
-#no NAs
+#no NAs seen
 
-# slightly annoyed it appends the value for logical variables
 X <- model.matrix(formula(paste0("~", paste0(c(0,Cov_set), collapse="+"))), data=X_final)
 X <- X[,colnames(X) != "roof_closedFALSE"]
 
@@ -776,7 +673,6 @@ X_test_df<- final_test %>%
   mutate_at(c("roof_dome", "roof_open", "roof_closed", 
               "precipitation_unknown","precipitation_yes"),as.logical) 
 
-#WHY DOES IT CREATE ROOF_CLOSEDFALSE??????
 X_test <- model.matrix(formula(paste0("~", paste0(c(0,Cov_set), collapse="+"))), data=X_test_df)
 X_test <- X_test[,colnames(X_test) != "roof_closedFALSE"]
 
@@ -785,12 +681,8 @@ Y_test <- pull(final_test[,outcome_name])
 XY_test <- X_test %>% 
   bind_cols(total_points = Y_test)
 
-library(corrplot)
-m <- cor(X)
-corrplot(m)
-
-### Cescriptives
-
+### QUICK DESCRIPTIVE EXAMINATION
+# Cumulative average predictor set
 final_train %>%
   select(total_points, pos_imptot, def_imptot, pos_imptotdiff,week,
          max_dist_mv,max_made_dist_mv,kicker_home,fg_pct_mv,xp_pct_mv,
@@ -810,49 +702,41 @@ final_train %>%
     method = glm,
     y = total_points,
     method.args = list(family = gaussian),
-    #method.args = list(family = binomial),
-    #exponentiate = TRUE,
     pvalue_fun = ~ style_pvalue(.x, digits = 2)
   ) 
   
-  
-final_train %>%
-select(total_points, pos_imptot, def_imptot, pos_imptotdiff,week,
-         max_dist,kicker_home,kicker_szn_fg_pct,kicker_szn_xp_pct,
-         off_epa,off_success_rate,off_rz_epa,off_pz_epa,
-         off_rush_epa,off_pass_epa,pos_def_epa,def_off_epa,
-         def_epa,def_success_rate,def_rz_epa,def_pz_epa,
-       def_rush_epa_ma, def_pass_epa_ma,
-         big_play_20_rate,neg_play_5_rate,fourth_down_try_rate,
-         Pos_Offense_DVOA,Pos_Defense_DVOA,Def_Offense_DVOA,Def_Defense_DVOA,
-         roof_closed,roof_open,roof_dome,
-       precipitation_unknown,precipitation_yes,
-         wind_weather
-  ) %>%
-  tbl_uvregression(
-    method = glm,
-    y = total_points,
-    method.args = list(family = gaussian),
-    #exponentiate = TRUE,
-    pvalue_fun = ~ style_pvalue(.x, digits = 2)
-  ) 
+#season-long variable predictor set
+# final_train %>%
+# select(total_points, pos_imptot, def_imptot, pos_imptotdiff,week,
+#          max_dist,kicker_home,kicker_szn_fg_pct,kicker_szn_xp_pct,
+#          off_epa,off_success_rate,off_rz_epa,off_pz_epa,
+#          off_rush_epa,off_pass_epa,pos_def_epa,def_off_epa,
+#          def_epa,def_success_rate,def_rz_epa,def_pz_epa,
+#        def_rush_epa_ma, def_pass_epa_ma,
+#          big_play_20_rate,neg_play_5_rate,fourth_down_try_rate,
+#          Pos_Offense_DVOA,Pos_Defense_DVOA,Def_Offense_DVOA,Def_Defense_DVOA,
+#          roof_closed,roof_open,roof_dome,
+#        precipitation_unknown,precipitation_yes,
+#          wind_weather
+#   ) %>%
+#   tbl_uvregression(
+#     method = glm,
+#     y = total_points,
+#     method.args = list(family = gaussian),
+#     #exponentiate = TRUE,
+#     pvalue_fun = ~ style_pvalue(.x, digits = 2)
+#   ) 
 
-#### OTHER METHODOLOGIES USING TIDYMODELS
+#### METHODOLOGIES USING TIDYMODELS
+# SET UP TIDYMODEL FRAMEWORK
 
-#set this up? https://optimumsportsperformance.com/blog/tidymodels-train-test-set-without-initial_split/
 library(tidymodels)
 library(stacks)
-
-#this is what I did initially
-# XY_clust <- initial_split(XY_clust, prop=.75)
-# XY_train <- training(XY_clust)
-# XY_folds <- vfold_cv(XY_train,v=10) 
 
 set.seed(567)
 XY_folds <- vfold_cv(data = XY_clust, v = 10,strata=season)
 
-#normalization is used mainly in linear models/KNN/neural networks because 
-#they're affected by absolute values taken by features
+
 simple_prep_rec <-
   recipe(Y ~ ., data = XY_clust)  %>%
   # remove any zero variance predictors
@@ -861,26 +745,25 @@ simple_prep_rec <-
   # remove any linear combinations
   step_lincomb(all_numeric_predictors())
 
+#splines for implied scores, ultimately not needed
 ns_prep_rec <- simple_prep_rec %>% 
   step_ns(pos_imptot, def_imptot)
 
+#normalization is used mainly in linear models/KNN/neural networks because 
+#they're affected by absolute values taken by features
 norm_prep_rec <- simple_prep_rec %>% 
   #step_normalize(all_numeric_predictors())
   step_center(all_numeric_predictors()) %>%
   step_scale(all_numeric_predictors()) 
 
-cookie <- simple_prep_rec %>% prep() %>% 
-  bake(X_test) 
+# Just to visualize post-recipe values
+# cookie <- simple_prep_rec %>% prep() %>% 
+#   bake(X_test) 
 
-# new_train <- prep_rec %>% 
-#   prep() %>% 
-#   bake(prep_rec, new_data=NULL)
-
-#rmse_vals <- metric_set(mae)
 rmse_vals <- metric_set(rmse,mae,rsq)
 rsq_vals <- metric_set(rsq,rmse,mae)
 
-#set up parameter tuning
+#set up parameter tuning 
 ctrl_grid <- control_stack_bayes()
 ctrl_res <- control_stack_resamples()
 ctrl_lh <- control_stack_grid()
@@ -889,22 +772,20 @@ ctrl_lh <- control_stack_grid()
 doParallel::registerDoParallel()
 
 ### SVM
-#Tidyversion - Resource: https://www.tidymodels.org/learn/work/tune-svm/
-#Note: Tried SVM_poly but it seems brutally slow
+# Tidyversion - Resource: https://www.tidymodels.org/learn/work/tune-svm/
+# Note: Tried SVM_poly but it seems brutally slow on laptop
 library(tidymodels)
 svm_mod <-
   svm_rbf(cost = tune(), rbf_sigma = tune()) %>%
   set_mode("regression") %>%
   set_engine("kernlab")
 
-svm_grid <- grid_latin_hypercube(
-  cost(),
-  rbf_sigma(),
-  #margin(),
-  size = 20
-)
-
-svm_grid
+# svm_grid <- grid_latin_hypercube(
+#   cost(),
+#   rbf_sigma(),
+#   size = 20
+# )
+# svm_grid
 
 svm_wf <- workflow() %>%
   add_recipe(norm_prep_rec) %>% 
@@ -943,21 +824,26 @@ final_svm <- finalize_workflow(
 )
 final_svm
 
+# fit data
 svm_final <- final_svm %>%
   fit(data = XY_clust)
 
+# output predictions
 svm_finalpred <- predict(svm_final, XY_clust)
 
+# check fit vs pred on training set
 svm_rmse_vals_train <- predict(svm_final,as.data.frame(X)) %>% 
   rmse_vals(Y, .pred) %>% 
   mutate(model = "svm")
 svm_rmse_vals_train
 
+# check fit vs pred on test set
 svm_rmse_vals_test <- predict(svm_final,as.data.frame(X_test)) %>% 
   rmse_vals(Y_test,.pred) %>% 
   mutate(model = "svm")
 svm_rmse_vals_test
 
+# visual fit vs pred training data
 predict(svm_final,as.data.frame(X)) %>%
   ggplot(aes(x = .pred, y = Y)) +
   geom_point(size = 1.5, color = "midnightblue") +
@@ -968,6 +854,7 @@ predict(svm_final,as.data.frame(X)) %>%
   ) + xlim(-5,25) + ylim(-5,25) + labs(title="SVM regression",
                                        subtitle = "Training Data")
 
+# visual fit vs pred test data
 predict(svm_final,as.data.frame(X_test)) %>%
   ggplot(aes(x = .pred, y = Y_test)) +
   geom_point(alpha=.1, size = 1.5, color = "midnightblue") +
@@ -992,17 +879,16 @@ xgb_spec <- boost_tree(
   set_engine("xgboost") %>%
   set_mode("regression")
 
-xgb_grid <- grid_latin_hypercube(
-  tree_depth(),
-  min_n(),
-  loss_reduction(),
-  sample_size = sample_prop(),
-  finalize(mtry(), XY),
-  learn_rate(),
-  size = 30
-)
-
-xgb_grid
+# xgb_grid <- grid_latin_hypercube(
+#   tree_depth(),
+#   min_n(),
+#   loss_reduction(),
+#   sample_size = sample_prop(),
+#   finalize(mtry(), XY),
+#   learn_rate(),
+#   size = 30
+# )
+# xgb_grid
 
 xgb_wf <- workflow() %>%
   add_recipe(simple_prep_rec) %>% 
@@ -1030,7 +916,6 @@ print(Sys.time()-starttime)
 #28.67968 mins for 18/18 bayes
 
 xgb_res
-
 collect_metrics(xgb_res)
 
 xgb_res %>%
@@ -1046,7 +931,7 @@ xgb_res %>%
   facet_wrap(~parameter, scales = "free_x") +
   labs(x = NULL, y = "mae")
 
-show_mae <- show_best(xgb_res, "rmse")
+show_best(xgb_res, "rmse")
 best_rmse <- select_best(xgb_res, "rmse") 
 
 final_xgb <- finalize_workflow(
@@ -1057,11 +942,13 @@ final_xgb <- finalize_workflow(
 xgb_final <- final_xgb %>%
   fit(data = XY_clust)
 
+# examine fit vs pred training data
 xgb_rmse_vals_train <- predict(xgb_final,as.data.frame(X)) %>% 
   rmse_vals(Y,.pred) %>% 
   mutate(model = "xgb")
 xgb_rmse_vals_train
 
+# examine fit vs pred test data
 xgb_rmse_vals_test <- predict(xgb_final,as.data.frame(X_test)) %>% 
   rmse_vals(Y_test,.pred) %>% 
   mutate(model = "xgb")
@@ -1131,7 +1018,6 @@ final_glmn <- finalize_workflow(
   glmn_wf,
   best_rmse
 )
-
 final_glmn
 
 library(vip)
@@ -1145,9 +1031,11 @@ final_glmn %>%
   fit(data = XY) %>%
   tidy()
 
+# fit training data
 glmn_final <- final_glmn %>%
   fit(XY_clust)
 
+# visualize fit vs pred training data
 predict(glmn_final,as.data.frame(X)) %>%
   ggplot(aes(x = .pred, y = Y)) +
   geom_point(size = 1.5, color = "midnightblue") +
@@ -1157,20 +1045,24 @@ predict(glmn_final,as.data.frame(X)) %>%
     size = 1.2
   ) + xlim(-5,25) + ylim(-5,25) + labs(title="Elastic Net Regression",subtitle="Training Data")
 
+# visualize fit vs pred test data
+predict(glmn_final,as.data.frame(X_test)) %>% 
+  ggplot(aes(x=.pred,y=Y_test)) + geom_point(alpha=.1) + geom_smooth(method="loess",color="red") + xlim(c(-2,25)) + 
+  labs(title="Elastic Net Regression",subtitle="Test Data")
+
+# assess fit vs pred training data
 glmn_rmse_vals_train <- predict(glmn_final,as.data.frame(X)) %>% 
   rmse_vals(Y,.pred) %>% 
   mutate(model = "glmn")
 glmn_rmse_vals_train
 
+#assess fit vs pred test data
 glmn_rmse_vals_test <- predict(glmn_final,as.data.frame(X_test)) %>% 
   rmse_vals(Y_test,.pred) %>% 
   mutate(model = "glmn")
 glmn_rmse_vals_test
 
-predict(glmn_final,as.data.frame(X_test)) %>% 
-  ggplot(aes(x=.pred,y=Y_test)) + geom_point(alpha=.1) + geom_smooth(method="loess",color="red") + xlim(c(-2,25)) + 
-  labs(title="Elastic Net Regression",subtitle="Test Data")
-
+# visualize variable importance
 glmn_final %>%
   extract_fit_parsnip() %>%
   vip::vi() %>%
@@ -1226,6 +1118,7 @@ final_ridge <- finalize_workflow(
 final_ridge
 
 library(vip)
+library(viridis)
 
 final_ridge %>%
   fit(data = XY) %>%
@@ -1256,17 +1149,18 @@ ridge_rmse_vals_test
 # 2 mae     standard      3.62   ridge
 # 3 rsq     standard      0.0276 ridge
 
+#visualize pred vs actual (hexagons)
 predict(ridge_final,as.data.frame(X_test)) %>% 
   ggplot(aes(x=.pred,y=Y_test)) + geom_hex() + geom_smooth(method="loess",color="red") + xlim(c(-2,25)) +
   scale_fill_viridis() + labs(title="Ridge Regression",subtitle="Test Data")
 
+#visualize pred vs actual (points with low alpha)
 predict(ridge_final,as.data.frame(X_test)) %>% 
   ggplot(aes(x=.pred,y=Y_test)) + geom_point(alpha = .1) + geom_smooth(method="loess",color="red") + xlim(c(-2,25)) +
  labs(title="Ridge Regression",subtitle="Test Data")
 
 library(vip)
 library(forcats)
-library(viridis)
 
 ## FIGURE 3. RIDGE REGRESSION VARIABLE IMPORTANCE
 #I don't know why, but saving the environment breaks this
@@ -1301,7 +1195,7 @@ viplot <- ridge_final %>%
        caption = "STD = Season-to-Date, FG = Field Goal")
 viplot
 
-### Random forest
+### METHOD: Random forest
 
 rf_spec <- rand_forest(
   mtry = tune(),
@@ -1349,27 +1243,31 @@ fit(data = XY) %>%
 rf_final <- final_rf %>%
   fit(data = XY)
 
+# visualize actual vs pred training data (hexagons)
 predict(rf_final,as.data.frame(X)) %>% 
   ggplot(aes(x=.pred,y=Y)) + geom_hex() + geom_smooth(color="red") + xlim(c(-2,25)) +
   geom_abline(linetype = 2) + 
   labs(title="Random Forest Regression",subtitle="Train Data")
 
+# assess actual vs pred training data
 rf_rmse_vals_train <- predict(rf_final,as.data.frame(X)) %>% 
   rmse_vals(Y,.pred) %>% 
   mutate(model = "rf")
 rf_rmse_vals_train
 
-rf_rmse_vals_test <- predict(rf_final,as.data.frame(X_test)) %>% 
-  rmse_vals(Y_test,.pred) %>% 
-  mutate(model = "rf")
-rf_rmse_vals_test
-
+# visualize actual vs pred training data (hexagons)
 predict(rf_final,as.data.frame(X_test)) %>% 
   ggplot(aes(x=.pred,y=Y_test)) + geom_hex() + geom_smooth(color="red") + xlim(c(-2,25)) +
   geom_abline(linetype = 2) + 
   labs(title="Random Forest Regression",subtitle="Test Data")
 
-### KNN
+# assess actual vs pred test data
+rf_rmse_vals_test <- predict(rf_final,as.data.frame(X_test)) %>% 
+  rmse_vals(Y_test,.pred) %>% 
+  mutate(model = "rf")
+rf_rmse_vals_test
+
+### METHOD: KNN
 
 knn_spec <- nearest_neighbor(
   neighbors = tune(),
@@ -1379,6 +1277,7 @@ knn_spec <- nearest_neighbor(
   set_engine("kknn") %>%
   set_mode("regression")
 
+set.seed(890)
 knn_grid <- grid_latin_hypercube(
   neighbors(),
   weight_func(),
@@ -1392,8 +1291,8 @@ knn_wf <- workflow() %>%
 
 doParallel::registerDoParallel()
 
-starttime=Sys.time()
 set.seed(890)
+starttime=Sys.time()
 knn_res <- tune_grid(
   knn_wf,
   resamples = XY_folds,
@@ -1412,29 +1311,24 @@ final_knn <- finalize_workflow(
   knn_wf,
   best_rmse
 )
-
 final_knn
-
-library(vip)
-
-final_knn %>%
-  fit(data = XY) %>%
-  extract_fit_parsnip() %>%
-  vip(geom = "point")
 
 knn_final <- final_knn %>%
   fit(data = XY_clust)
 
+# assess truth vs predicted training set
 knn_rmse_vals_train <- predict(knn_final,as.data.frame(X)) %>% 
   rmse_vals(Y,.pred) %>% 
   mutate(model = "knn")
 knn_rmse_vals_train
 
+# assess truth vs predicted test set
 knn_rmse_vals_test<- predict(knn_final,as.data.frame(X_test)) %>% 
   rmse_vals(Y_test,.pred) %>% 
   mutate(model = "knn")
 knn_rmse_vals_test
 
+# visualize truth vs pred training data
 predict(knn_final,as.data.frame(X)) %>%
   ggplot(aes(x = .pred, y = Y)) +
   geom_point(size = 1.5, color = "midnightblue") +
@@ -1444,6 +1338,7 @@ predict(knn_final,as.data.frame(X)) %>%
     size = 1.2
   ) + xlim(-5,25) + ylim(-5,25) + labs(title="KNN",subtitle="Training Data")
 
+#visualize truth vs predicted test data
 predict(knn_final,as.data.frame(X_test)) %>%
   ggplot(aes(x = .pred, y = Y_test)) +
   geom_point(size = 1.5, color = "midnightblue") +
@@ -1453,8 +1348,7 @@ predict(knn_final,as.data.frame(X_test)) %>%
     size = 1.2
   ) + xlim(-5,25) + ylim(-5,25) + labs(title="KNN",subtitle="Test Data")
 
-### wanna try a bagmlp?
-#CROSSVALIDATED 
+### METHOD: BAGMLP
 library(baguette)
 
 bagmlp_spec <- bag_mlp(
@@ -1502,30 +1396,27 @@ final_bagmlp <- finalize_workflow(
 
 final_bagmlp
 
-library(vip)
-
-final_bagmlp %>%
-  fit(data = XY_clust) %>%
-  extract_fit_parsnip() %>%
-  vip(geom = "point")
-
 bagmlp_final <- final_bagmlp %>%
   fit(data = XY_clust)
 
+#assess truth vs predicted training data
 bagmlp_rmse_vals_train <- predict(bagmlp_final,as.data.frame(X)) %>% 
   rmse_vals(Y,.pred) %>% 
   mutate(model = "bagmlp")
 bagmlp_rmse_vals_train
 
+#visualize truth vs predicted training data
 predict(bagmlp_final,as.data.frame(X)) %>% 
   ggplot(aes(y=Y,x=.pred)) + geom_point() + geom_smooth() + xlim(c(-2,25)) + 
   labs(title="Bagged MLP",subtitle = "Training Data")
 
+#assess truth vs predicted test data
 bagmlp_rmse_vals_test <- predict(bagmlp_final,as.data.frame(X_test)) %>% 
   rmse_vals(Y_test,.pred) %>% 
   mutate(model = "bagmlp")
 bagmlp_rmse_vals_test
 
+#visualize truth vs predicted Test Data
 predict(bagmlp_final,as.data.frame(X_test)) %>% 
   ggplot(aes(y=Y_test,x=.pred)) + geom_hex() + geom_smooth(color="red") + xlim(c(-2,25)) + 
   labs(title="Bagged MLP",subtitle = "Test Data")
@@ -1534,6 +1425,7 @@ predict(bagmlp_final,as.data.frame(X_test)) %>%
 
 metric <- metric_set(rmse)
 
+#after looking at fits, I'm eliminating knn and rf for likely strong overfitting
 my_stack_data_st <- 
   stacks() %>%
   #add_candidates(knn_res) %>%
@@ -1563,35 +1455,30 @@ my_stack_train <-
   XY %>% 
   bind_cols(predict(my_stack_model_st, .))
 
+#assess truth vs predicted training data
 stack_rmse_vals_train <- my_stack_train %>% 
   rmse_vals(Y,.pred) %>% 
   mutate(model = "stack")
 stack_rmse_vals_train
 
+#visualize truth vs predicted training data
 my_stack_train %>% ggplot(aes(x=.pred,y=Y)) + geom_point() + geom_smooth() +
   xlim(-2,25) + labs(title="Model Stack", subtitle = "Training Data")
 
 my_stack_test <- 
   XY_test %>%
   bind_cols(predict(my_stack_model_st, .))
-  
+
+#assess truth vs predicted test data
 stack_rmse_vals_test <- my_stack_test %>% 
   rmse_vals(Y_test,.pred) %>% 
   mutate(model = "stack")
 stack_rmse_vals_test
 
+#visualize truth vs predicted test data
 my_stack_test %>% ggplot(aes(x=.pred,y=Y_test)) + geom_hex() + 
   geom_smooth(color = "red") +
   xlim(-2,25) + labs(title="Model Stack", subtitle = "Test Data")
-
-my_stack_test %>% 
-  ggplot(aes(x=week,y=abs(.pred-Y_test),group=week)) + geom_boxplot()
-
-my_stack_test %>% 
-  ggplot(aes(x=week,y=(.pred-Y_test),group=week)) + geom_boxplot()
-
-my_stack_test %>% 
-  ggplot(aes(x=Y_test)) + geom_histogram()
 
 ### COMBINE RESULTS
 
@@ -1666,11 +1553,10 @@ locations =cells_body(
   )) %>% 
   gtsave("rmse_kicker_models.png")
 
-# s <- chromote::default_chromote_object() #get the f object
-# s$close()
-
 ### COMPARE TO ESPN/NFL
-
+# not my data, but I can tell you were I got the files:
+# https://www.fantasypros.com/nfl/projections/k.php?week=1 
+# (you can just cycle thru by replacing 1 with 2:17)
 path="..\\kickerproj"
 file_list = list.files("./kickerproj")
 kicker_proj = readr::read_csv(paste0(getwd(),"/kickerproj/",file_list), id = "file_name") %>% 
@@ -1684,9 +1570,6 @@ filter(!is.na(Player),FPTS != 0.0) %>%
   arrange(week,Team) %>% 
   select(season,week,Team,kicker_name,FPTS) %>% 
   rename(fpts_site = FPTS)
-
-kicker_proj_all <- kicker_proj %>%
-  full_join(kicker_proj2,by=c("season","week","Team","kicker_name"))
 
 median(final_train$total_points)
 mean(final_train$total_points)
@@ -1728,10 +1611,10 @@ kicker_def_cm_rmse <- real_and_proj %>% ungroup() %>% rmse_vals(total_points,szn
   mutate(model="kkr_def_cm")
 kicker_def_cm_rmse
 
-#peek at how 
+#peek at how correlated truth and site projections are
 cor(real_and_proj$fpts_site,real_and_proj$total_points,use="pairwise.complete.obs")
-ggplot(data=real_and_proj,aes(real_and_proj,x=fpts_site,y=fpts_indep)) + geom_point() +geom_smooth() +xlim(-2,25)
 
+#plot truth vs projections hexagons
 ggplot(data=real_and_proj,aes(real_and_proj,x=fpts_site,y=total_points)) + geom_hex() + 
   scale_fill_viridis() + geom_smooth(color="red") +xlim(-2,25) + geom_abline(linetype=2)
 
@@ -1968,44 +1851,6 @@ test_proj_all_rmse <- test_all_rmse %>%
   )) %>% 
   gtsave("rmse_proj_kicker_models.png")
 
-# TIDYPOSTERIOR
-
-bagmlp_rmse <- 
-  bagmlp_final %>% 
-  fit_resamples(XY_folds) %>% 
-  collect_metrics(bagmlp_res, summarize = FALSE) %>% 
-  dplyr::filter(.metric == "rmse") %>% 
-  dplyr::select(id, bagmlp = .estimate)
-
-xgb_rmse <- 
-  xgb_final %>% 
-  fit_resamples(XY_folds) %>% 
-  collect_metrics(xgb_res, summarize = FALSE) %>% 
-  dplyr::filter(.metric == "rmse") %>% 
-  dplyr::select(id, xgb = .estimate)
-
-stack_rmse <-
-  my_stack_model_st %>% 
-  predict(XY_folds)
-
-resamples_df <- full_join(xgb_rmse, bagmlp_rmse, by = "id")
-resamples_df
-
-set.seed(101)
-rmse_model_via_df <- perf_mod(resamples_df, iter = 2000)
-
-rmse_model_via_df %>% 
-  tidy() %>% 
-  ggplot(aes(x = posterior)) + 
-  geom_histogram(bins = 40, col = "blue", fill = "blue", alpha = .4) + 
-  facet_wrap(~ model, ncol = 1) + 
-  xlab("RMSE")
-
-contrast_models(rmse_model_via_df, seed = sample.int(10000, 1)) %>% 
-  summary() 
-
-rmse_model_via_df %>% autoplot()
-
 ### Extra descriptives for webppage
 
 final_avg <- final_data %>% 
@@ -2018,206 +1863,4 @@ final_avg <- final_data %>%
   summarize(fg_pct_mv_mean = mean(fg_pct_mv),fg_pct_mv_sd = sd(fg_pct_mv),
             xp_pct_mv_median=median(xp_pct_mv),xp_pct_mv_iqr = IQR(xp_pct_mv))
 
-### EXTRA NON-TIDYMODEL FUN
-# START GRF MODELS
 
-#original 5000 trees
-Y.forest = regression_forest(X, Y, num.trees=20000,clusters=cluster_id[1:dim(X)[1]],tune.parameters="all",seed=888)
-Y.hat = predict(Y.forest)$predictions
-
-Y_and_Yhat <- bind_cols(Y=Y,Y.hat=Y.hat) 
-#mutate(res = Y.hat-Y, sqres = res*res)
-
-ggplot(data=Y_and_Yhat,aes(x=Y.hat,y=Y)) + geom_point() +
-  geom_smooth() + xlim(-5,30) + ylim(-5,30)
-
-summary(Y.forest)
-variable_importance(Y.forest)
-r.pred <- predict(Y.forest, estimate.variance=TRUE)
-standard.error = sqrt(r.pred$variance.estimates)
-Y.forest
-
-test_pred <- predict(Y.forest,X_test,clusters=posteam_seas)
-
-#fit metrics
-test_pred_comp <- bind_cols(Y_2023=Y_test,Y_pred=test_pred$prediction) 
-
-ggplot(data=test_pred_comp,aes(x=Y_pred,y=Y_2023)) + geom_point() + geom_smooth() +
-  xlim(0,25)
-
-test_pred_comp %>% rmse_vals(as.numeric(Y_2023),as.numeric(Y_pred))
-#1 rmse    standard        4.59
-test_pred_comp %>% rsq(Y_test,Y_pred)
-#1 rsq     standard     0.00301
-test_pred_comp %>% mae(Y_test,Y_pred)
-#1 mae     standard        3.59
-
-#compare to mean of Y_2023 only
-test_pred_comp %>% rmse(as.numeric(Y_2023),rep(mean(Y_2023),length(Y_2023)))
-test_pred_comp %>% rsq(Y_2023,Y_pred)
-test_pred_comp %>% mae(Y_2023,rep(mean(Y_2023),length(Y_2023)))
-#1 mae     standard        3.55
-
-#compare to team_season means
-XY_2023 <- final_test_2023 %>% 
-  group_by(posteam) %>% 
-  mutate(Y_2023_teammean = mean(total_points,na.rm=T))
-
-test_pred_comp %>% rmse(as.numeric(Y_2023),XY_2023$Y_2023_teammean)
-test_pred_comp %>% rsq(as.numeric(Y_2023),XY_2023$Y_2023_teammean)
-test_pred_comp %>% mae(as.numeric(Y_2023),XY_2023$Y_2023_teammean)
-#1 mae     standard        3.47
-
-#compare to running means
-test_pred_comp %>% rmse(as.numeric(Y_2023),final_test$szn_kkr_mean_pts)
-test_pred_comp %>% rsq(as.numeric(Y_2023),final_test$szn_kkr_mean_pts)
-test_pred_comp %>% mae(as.numeric(Y_2023),final_test$szn_kkr_mean_pts)
-#1 mae     standard        3.94
-
-#compare to running def means
-test_pred_comp %>% rmse(as.numeric(Y_2023),final_test$szn_def_kkr_mean_pts)
-test_pred_comp %>% rsq(as.numeric(Y_2023),final_test$szn_def_kkr_mean_pts)
-test_pred_comp %>% mae(as.numeric(Y_2023),final_test$szn_def_kkr_mean_pts)
-#1 mae     standard        3.94
-
-
-# ggplot(data=test_pred_comp,aes(x=Y_pred,y=Y_2023)) + geom_point() +
-#   geom_smooth() + xlim(-5,30) + ylim(-5,30)
-
-### pared down model
-varimp <- variable_importance(Y.forest)
-selected.idx = which ( varimp > mean ( varimp ))
-
-Y.forest = regression_forest(X, Y, num.trees=20000,clusters=cluster_id[1:dim(X)[1]],
-                             tune.parameters="all",seed=888)
-Y.hat = predict(Y.forest)$predictions
-
-Y.forest.small = regression_forest(X[, selected.idx],Y,
-                                   clusters = cluster_id[1:dim(X)[1]],
-                                   tune.parameters = "all" , seed=888,num.trees=20000)
-
-summary(Y.forest.small)
-variable_importance(Y.forest.small)
-
-Y.hat = predict(Y.forest.small)$predictions
-
-test_pred.small <- predict(Y.forest.small,X_test[, selected.idx],clusters=posteam_seas[cluster_id[(dim(X)[1]+1)]:length(cluster_id)])
-test_pred_comp <- bind_cols(Y_2023=Y_test,Y_pred=test_pred.small$prediction) 
-test_pred_comp %>% rmse_vals(Y_2023,Y_pred)
-
-test_pred_comp %>% rmse_vals(as.numeric(Y_2023),rep(mean(Y_2023),length(Y_2023)))
-#1 rmse    standard        4.59
-test_pred_comp %>% rsq(Y_2023,Y_pred)
-#1 rsq     standard    0.000529
-test_pred_comp %>% mae(Y_2023,rep(mean(Y_2023),length(Y_2023)))
-#1 mae     standard        3.60
-
-### LLR
-c.forest.ll <- ll_regression_forest(X = X, 
-                                    Y = Y, 
-                                    enable.ll.split = TRUE,
-                                    num.trees = 20000,
-                                    # tune.num.trees = 100,
-                                    # tune.num.reps = 200,
-                                    # tune.num.draws = 2000,
-                                    clusters=cluster_id[1:dim(X)[1]],
-                                    seed = 888) 
-
-ll_preds <- predict(c.forest.ll)
-plot(x = ll_preds$predictions, y = Y)
-
-summary(c.forest.ll)
-variable_importance(c.forest.ll)
-
-ll_preds_2023 <- predict(c.forest.ll,X_test)
-plot(x = ll_preds_2023$predictions, y = Y_test)
-
-test_pred_comp <- bind_cols(Y_2023=Y_test,Y_pred=ll_preds_2023$prediction)
-
-test_pred_comp %>% rmse_vals(as.numeric(Y_2023),as.numeric(Y_pred))
-#1 rmse    standard        4.57
-test_pred_comp %>% rsq(Y_2023,Y_pred)
-#1 rsq     standard     0.00875
-test_pred_comp %>% mae(Y_2023,Y_pred)
-#1 mae     standard        3.58
-
-ggplot(data=test_pred_comp,aes(x=Y_pred,y=Y_2023)) + geom_point() + geom_smooth() +
-  xlim(0,25)
-
-
-### SCRATCH
-
-levis <- pbp %>% filter(game_stadium %in% c("Levi's Stadium","Empower Field at Mile High",
-                                            "Sports Authority Field at Mile High",
-                                            "CenturyLink Field","Lumen Field"),
-                        season < 2023)
-
-levis2 <- load_pbp(2023) %>% 
-  filter(game_stadium %in% c("Levi's Stadium","Empower Field at Mile High",
-                             "Sports Authority Field at Mile High",
-                             "CenturyLink Field","Lumen Field"))
-
-#ws_pattern <-  '(?<=Wind: [A-Za-z,\\\\]{0,20}\\ )[0-9]{0,2}'
-ws_pattern <- "(?<=Wind:\\D{0,30})\\d{1,2}"
-#ws_pattern <-  '(?<=Wind: [\\d]{0,20}\\ )[0-9]{0,2}'
-
-#weather_pattern <- '^[A-Za-z\\s]+(?= Temp)'
-weather_pattern <- '^[:print:]+(?= Temp)'
-
-weathered <- levis %>% 
-  bind_rows(levis2) %>% 
-  mutate(wind_weather = str_extract(weather,ws_pattern),
-         weather_desc = str_extract(weather,weather_pattern)) %>% 
-  #fix calm days to have zero wind
-  mutate(wind_weather = ifelse(str_detect(weather,"Calm"),"0",wind_weather)) %>% 
-  mutate(weather_desc = ifelse(str_detect(weather_desc,"(N|n)/(A|a)")==TRUE,NA,weather_desc)) %>% 
-  mutate(precipitation = case_when(str_detect(weather_desc,"Chance|Change")==TRUE ~ "maybe",
-                                   str_detect(weather_desc,"(R|r)ain|(S|s)now|(S|s)howers|(D|d)rizzle")==TRUE ~ "yes",
-                                   is.na(weather_desc) ~ NA,
-                                   TRUE ~ "no")) %>% 
-  mutate(precipitation = ifelse(roof %in% c("dome","closed") & is.na(precipitation),"no",precipitation),
-         wind_weather = ifelse(roof %in% c("dome","closed") & is.na(wind_weather),0,wind_weather)
-         ) %>%
-  #fix stray games with missing wind_weather
-  mutate(precipitation = ifelse(game_id=="2022_21_CIN_KC","no",precipitation),
-         wind_weather = ifelse(game_id=="2022_21_CIN_KC",13,wind_weather),
-         wind_weather = ifelse(game_id=="2021_13_TB_ATL",0,wind_weather),
-         roof = ifelse(game_id=="2021_13_TB_ATL","closed",roof),
-         precipitation = ifelse(game_id=="2023_02_NYJ_DAL","no",precipitation),
-         wind_weather = ifelse(game_id=="2023_02_NYJ_DAL",0,wind_weather),
-         roof = ifelse(game_id=="2023_02_NYJ_DAL","closed",roof),
-         precipitation = ifelse(game_id=="2023_03_DAL_ARI","no",precipitation),
-         wind_weather = ifelse(game_id=="2023_03_DAL_ARI",0,wind_weather),
-         roof = ifelse(game_id=="2023_03_DAL_ARI","closed",roof),
-         wind_weather = ifelse(game_id=="2018_06_TB_ATL",5,wind_weather),
-         wind_weather = ifelse(game_id=="2018_11_KC_LA",0,wind_weather),
-         wind_weather = ifelse(game_id=="2019_11_CHI_LA",0,wind_weather),
-         wind_weather = ifelse(game_id=="2017_10_HOU_LA",0,wind_weather),
-         wind_weather = ifelse(game_id=="2017_14_PHI_LA",0,wind_weather)) %>% 
-  mutate(wind_weather = ifelse(is.na(wind_weather) & home_team=="ATL",4.36,wind_weather)) %>% 
-  #for precipitation, there's a fair number missing, so we'll do unk
-  mutate(precipitation = ifelse(is.na(precipitation),"unknown",precipitation),
-         wind_weather = as.numeric(wind_weather)) %>% 
-  filter(season > 2014) %>% 
-  count(game_id,weather,weather_desc,wind,wind_weather,roof,precipitation,
-        game_stadium) %>% 
-  mutate(game_stadium = ifelse(game_stadium %in% c("Empower Field at Mile High",
-                               "Sports Authority Field at Mile High"),"Mile High",
-                          game_stadium),
-         game_stadium = ifelse(game_stadium %in% c("CenturyLink Field","Lumen Field"),
-                               "Seahawks Stadium",game_stadium)) 
-
-weathered %>% ungroup() %>% 
-    count(game_stadium,precipitation)
-
-ww <- weathered %>% 
-  select(game_id,weather,weather_desc,wind,wind_weather,roof)
-#check for precipitation descriptors
-#unique(ww$weather_desc)
-nowind_weather <- ww %>% 
-  filter(is.na(wind_weather)) %>% 
-  count(game_id,weather,roof)
-
-noweather <- weathered %>% 
-  filter(is.na(weather_desc)) %>% 
-  count(game_id,weather,roof)
